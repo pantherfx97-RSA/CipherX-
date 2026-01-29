@@ -1,0 +1,45 @@
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    match /users/{userId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    match /requests/{requestId} {
+      allow read, write: if request.auth != null && (
+        request.auth.uid == resource.data.senderId || 
+        request.auth.uid == resource.data.receiverId ||
+        request.auth.uid == request.resource.data.receiverId
+      );
+    }
+
+    match /contacts/{userId}/list/{contactId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    match /messages/{messageId} {
+      function hasMutualTrust(sender, receiver) {
+        return exists(/databases/$(database)/documents/contacts/$(sender)/list/$(receiver)) &&
+               get(/databases/$(database)/documents/contacts/$(sender)/list/$(receiver)).data.status == 'accepted' &&
+               exists(/databases/$(database)/documents/contacts/$(receiver)/list/$(sender)) &&
+               get(/databases/$(database)/documents/contacts/$(receiver)/list/$(sender)).data.status == 'accepted';
+      }
+
+      allow read: if request.auth != null && (
+        request.auth.uid == resource.data.receiverId || 
+        request.auth.uid == resource.data.senderId
+      );
+
+      allow create: if request.auth != null && 
+                    request.auth.uid == request.resource.data.senderId &&
+                    hasMutualTrust(request.resource.data.senderId, request.resource.data.receiverId);
+
+      allow update: if request.auth != null && 
+                    request.auth.uid == resource.data.receiverId &&
+                    request.resource.data.status == 'revealed';
+    }
+  }
+}

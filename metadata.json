@@ -1,0 +1,8 @@
+{
+  "name": "CipherX",
+  "description": "A privacy-first messaging application that hides encrypted real messages behind harmless AI-generated decoy messages. Features zero-knowledge architecture, one-time reveals, and decoy-only environments.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
