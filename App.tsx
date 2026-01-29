@@ -7,6 +7,7 @@ import ChatList from './views/ChatList.js';
 import ChatRoom from './views/ChatRoom.js';
 import Splash from './views/Splash.js';
 import { performIntegrityAudit, getDeviceIdentity } from './services/integrityService.js';
+import { isBackendReady } from './services/backendService.js';
 
 const PrivacyShield = ({ visible }: { visible: boolean }) => (
   <div className={`fixed inset-0 z-[9999] bg-black flex flex-col items-center justify-center transition-opacity duration-300 pointer-events-none ${visible ? 'opacity-100' : 'opacity-0'}`}>
@@ -15,6 +16,27 @@ const PrivacyShield = ({ visible }: { visible: boolean }) => (
     </div>
     <p className="text-[10px] text-gray-500 uppercase tracking-[0.5em] font-black">Secure Environment Active</p>
     <p className="text-[8px] text-gray-700 uppercase tracking-[0.2em] mt-2">Content Obscured for Privacy</p>
+  </div>
+);
+
+const ConfigErrorView = () => (
+  <div className="h-screen w-full bg-black flex flex-col items-center justify-center p-12 text-center animate-fade-in">
+    <div className="w-16 h-16 border border-red-900/30 rounded-3xl flex items-center justify-center mb-10 shadow-[0_0_40px_rgba(127,29,29,0.2)]">
+      <i className="fa-solid fa-triangle-exclamation text-red-600 text-2xl"></i>
+    </div>
+    <h2 className="text-sm font-black text-white mb-6 uppercase tracking-[0.4em]">Node Configuration Error</h2>
+    <div className="max-w-xs space-y-4 text-[10px] text-gray-500 uppercase tracking-widest leading-relaxed font-bold">
+      <p>The secure relay (Firebase) is not initialized.</p>
+      <div className="p-4 bg-gray-900/50 rounded-xl border border-gray-800 text-left space-y-2">
+        <p className="text-gray-400">Required Environment Variables:</p>
+        <ul className="list-disc pl-4 space-y-1 text-gray-600">
+          <li>VITE_FIREBASE_API_KEY</li>
+          <li>VITE_FIREBASE_PROJECT_ID</li>
+          <li>API_KEY (for Gemini)</li>
+        </ul>
+      </div>
+      <p className="pt-4 text-gray-700">Check Vercel Project Settings > Environment Variables and ensure values are propagated.</p>
+    </div>
   </div>
 );
 
@@ -128,6 +150,8 @@ const App: React.FC = () => {
   };
 
   if (!isInitialized) return <Splash />;
+
+  if (!isBackendReady) return <ConfigErrorView />;
 
   if (!isDisclosureAccepted) {
     return (

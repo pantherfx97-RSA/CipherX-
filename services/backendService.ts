@@ -1,23 +1,53 @@
 
-import { initializeApp } from 'firebase/app';
+import { initializeApp, getApp, getApps, FirebaseApp } from 'firebase/app';
 import { 
   getFirestore, doc, setDoc, getDoc, collection, query, where, 
   getDocs, addDoc, onSnapshot, updateDoc, deleteDoc, 
-  Unsubscribe
+  Unsubscribe, Firestore
 } from 'firebase/firestore';
 import { Message, User, UserAuth, ContactRequest, ContactRecord, AppMode } from '../types.js';
 
-const firebaseConfig = {
-  apiKey: process.env.VITE_FIREBASE_API_KEY || "AIzaSy-PLACEHOLDER", 
-  authDomain: process.env.VITE_FIREBASE_AUTH_DOMAIN || "cipherx-app.firebaseapp.com",
-  projectId: process.env.VITE_FIREBASE_PROJECT_ID || "cipherx-app",
-  storageBucket: process.env.VITE_FIREBASE_STORAGE_BUCKET || "cipherx-app.appspot.com",
-  messagingSenderId: process.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "000000000000",
-  appId: process.env.VITE_FIREBASE_APP_ID || "1:0000:web:0000"
+// Safe access to environment variables or hardcoded fallback
+const getEnv = (key: string, fallback: string): string => {
+  try {
+    const val = (window as any).process?.env?.[key];
+    if (val && val !== `VITE_FIREBASE_${key.split('_').pop()}` && val !== "AIzaSy-PLACEHOLDER") {
+        return val;
+    }
+    return fallback;
+  } catch {
+    return fallback;
+  }
 };
 
-const app = initializeApp(firebaseConfig);
-const db = getFirestore(app);
+const firebaseConfig = {
+  apiKey: getEnv('VITE_FIREBASE_API_KEY', "AIzaSyAj8KDrTlejMWJUEsSefOAxRRpNv3DuaQc"), 
+  authDomain: getEnv('VITE_FIREBASE_AUTH_DOMAIN', "cipherx-a82b4.firebaseapp.com"),
+  projectId: getEnv('VITE_FIREBASE_PROJECT_ID', "cipherx-a82b4"),
+  storageBucket: getEnv('VITE_FIREBASE_STORAGE_BUCKET', "cipherx-a82b4.firebasestorage.app"),
+  messagingSenderId: getEnv('VITE_FIREBASE_MESSAGING_SENDER_ID', "542292695754"),
+  appId: getEnv('VITE_FIREBASE_APP_ID', "1:542292695754:web:ca9dd9f8ab596d725f3233")
+};
+
+let app: FirebaseApp | undefined;
+let db: Firestore | undefined;
+export let isBackendReady = false;
+
+try {
+  // Use existing app if already initialized, otherwise create new one
+  if (!getApps().length) {
+    app = initializeApp(firebaseConfig);
+  } else {
+    app = getApp();
+  }
+  
+  if (app) {
+    db = getFirestore(app);
+    isBackendReady = !!db;
+  }
+} catch (error) {
+  console.error("CipherX: Failed to initialize Firebase:", error);
+}
 
 class BackendService {
   private async hashValue(val: string, salt: string): Promise<string> {
@@ -27,9 +57,23 @@ class BackendService {
     return btoa(String.fromCharCode(...new Uint8Array(hashBuffer)));
   }
 
+  private ensureDb(): Firestore {
+    if (!db) {
+      // Attempt to recover if db is somehow not initialized
+      try {
+        const currentApp = getApp();
+        db = getFirestore(currentApp);
+      } catch (e) {
+        throw new Error("Secure Node Offline: Database connection could not be established.");
+      }
+    }
+    return db!;
+  }
+
   async login(username: string, password: string, fingerprint: string): Promise<User> {
+    const firestore = this.ensureDb();
     const lowerName = username.toLowerCase();
-    const authRef = doc(db, 'userAuth', lowerName);
+    const authRef = doc(firestore, 'userAuth', lowerName);
     const authSnap = await getDoc(authRef);
 
     if (!authSnap.exists()) throw new Error("Identity mismatch.");
@@ -38,7 +82,7 @@ class BackendService {
     const hash = await this.hashValue(password, auth.salt);
     if (hash !== auth.passwordHash) throw new Error("Identity mismatch.");
     
-    const userRef = doc(db, 'users', auth.id);
+    const userRef = doc(firestore, 'users', auth.id);
     const userSnap = await getDoc(userRef);
     if (!userSnap.exists()) throw new Error("Node corrupted.");
     
@@ -50,8 +94,9 @@ class BackendService {
   }
 
   async register(username: string, password: string, realPin: string, decoyPin: string, inviteCode: string, fingerprint: string): Promise<User> {
+    const firestore = this.ensureDb();
     const lowerName = username.toLowerCase();
-    const authRef = doc(db, 'userAuth', lowerName);
+    const authRef = doc(firestore, 'userAuth', lowerName);
     const authSnap = await getDoc(authRef);
     if (authSnap.exists()) throw new Error("Identity already claimed.");
 
@@ -75,13 +120,14 @@ class BackendService {
       deviceFingerprint: fingerprint
     };
 
-    await setDoc(doc(db, 'users', uid), newUser);
+    await setDoc(doc(firestore, 'users', uid), newUser);
     await setDoc(authRef, { id: uid, username: lowerName, passwordHash, realPinHash, decoyPinHash, salt });
     return newUser;
   }
 
   async verifyPin(username: string, pin: string): Promise<AppMode> {
-    const authRef = doc(db, 'userAuth', username.toLowerCase());
+    const firestore = this.ensureDb();
+    const authRef = doc(firestore, 'userAuth', username.toLowerCase());
     const authSnap = await getDoc(authRef);
     if (!authSnap.exists()) throw new Error("Lockdown engaged.");
     const auth = authSnap.data() as UserAuth;
@@ -92,16 +138,17 @@ class BackendService {
   }
 
   async sendContactRequest(senderId: string, receiverUsername: string): Promise<void> {
+    const firestore = this.ensureDb();
     const lowerTarget = receiverUsername.toLowerCase();
-    const authRef = doc(db, 'userAuth', lowerTarget);
+    const authRef = doc(firestore, 'userAuth', lowerTarget);
     const authSnap = await getDoc(authRef);
     if (!authSnap.exists()) throw new Error("Node not found.");
     
     const targetUid = authSnap.data().id;
-    const senderSnap = await getDoc(doc(db, 'users', senderId));
+    const senderSnap = await getDoc(doc(firestore, 'users', senderId));
     const sender = senderSnap.data() as User;
 
-    await addDoc(collection(db, 'requests'), {
+    await addDoc(collection(firestore, 'requests'), {
       senderId,
       senderUsername: sender.username,
       receiverId: targetUid,
@@ -112,7 +159,8 @@ class BackendService {
   }
 
   subscribeRequests(userId: string, callback: (requests: ContactRequest[]) => void): Unsubscribe {
-    const q = query(collection(db, 'requests'), where('receiverId', '==', userId), where('status', '==', 'pending'));
+    const firestore = this.ensureDb();
+    const q = query(collection(firestore, 'requests'), where('receiverId', '==', userId), where('status', '==', 'pending'));
     return onSnapshot(q, (snapshot) => {
       const requests = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as ContactRequest));
       callback(requests);
@@ -120,23 +168,25 @@ class BackendService {
   }
 
   async respondToRequest(requestId: string, userId: string, status: 'accepted' | 'ignored'): Promise<void> {
-    const reqRef = doc(db, 'requests', requestId);
+    const firestore = this.ensureDb();
+    const reqRef = doc(firestore, 'requests', requestId);
     const reqSnap = await getDoc(reqRef);
     if (!reqSnap.exists()) return;
     const req = reqSnap.data() as ContactRequest;
 
     if (status === 'accepted') {
       const record = { status: 'accepted', handshakeFingerprint: req.fingerprint, addedAt: Date.now() };
-      await setDoc(doc(db, 'contacts', req.senderId, 'list', req.receiverId), record);
-      await setDoc(doc(db, 'contacts', req.receiverId, 'list', req.senderId), record);
+      await setDoc(doc(firestore, 'contacts', req.senderId, 'list', req.receiverId), record);
+      await setDoc(doc(firestore, 'contacts', req.receiverId, 'list', req.senderId), record);
     }
     await deleteDoc(reqRef);
   }
 
   async getContacts(userId: string): Promise<{user: User, record: ContactRecord}[]> {
-    const listSnap = await getDocs(collection(db, 'contacts', userId, 'list'));
+    const firestore = this.ensureDb();
+    const listSnap = await getDocs(collection(firestore, 'contacts', userId, 'list'));
     const contacts = await Promise.all(listSnap.docs.map(async (d) => {
-      const userSnap = await getDoc(doc(db, 'users', d.id));
+      const userSnap = await getDoc(doc(firestore, 'users', d.id));
       return {
         user: userSnap.data() as User,
         record: { contactId: d.id, ...d.data() } as ContactRecord
@@ -146,12 +196,14 @@ class BackendService {
   }
 
   async sendMessage(msg: Message, keyJwk: any): Promise<void> {
-    await setDoc(doc(db, 'messages', msg.id), msg);
-    await setDoc(doc(db, 'messageKeys', msg.id), { key: keyJwk, receiverId: msg.receiverId });
+    const firestore = this.ensureDb();
+    await setDoc(doc(firestore, 'messages', msg.id), msg);
+    await setDoc(doc(firestore, 'messageKeys', msg.id), { key: keyJwk, receiverId: msg.receiverId });
   }
 
   subscribeMessages(currentUserId: string, targetUserId: string, callback: (msgs: Message[]) => void): Unsubscribe {
-    const q = query(collection(db, 'messages'));
+    const firestore = this.ensureDb();
+    const q = query(collection(firestore, 'messages'));
     return onSnapshot(q, (snapshot) => {
       const msgs = snapshot.docs
         .map(d => d.data() as Message)
@@ -162,12 +214,14 @@ class BackendService {
   }
 
   async getMessageKey(messageId: string): Promise<any> {
-    const snap = await getDoc(doc(db, 'messageKeys', messageId));
+    const firestore = this.ensureDb();
+    const snap = await getDoc(doc(firestore, 'messageKeys', messageId));
     return snap.exists() ? snap.data().key : null;
   }
 
   async updateMessageStatus(messageId: string, newStatus: 'revealed' | 'destroyed'): Promise<void> {
-    const msgRef = doc(db, 'messages', messageId);
+    const firestore = this.ensureDb();
+    const msgRef = doc(firestore, 'messages', messageId);
     await updateDoc(msgRef, { status: newStatus });
     
     if (newStatus === 'revealed') {
@@ -180,13 +234,14 @@ class BackendService {
           status: 'destroyed',
           mediaMimeType: null
         });
-        await deleteDoc(doc(db, 'messageKeys', messageId));
+        await deleteDoc(doc(firestore, 'messageKeys', messageId));
       }, (msg.expiration || 15) * 1000);
     }
   }
 
   async getUserById(id: string): Promise<User | null> {
-    const snap = await getDoc(doc(db, 'users', id));
+    const firestore = this.ensureDb();
+    const snap = await getDoc(doc(firestore, 'users', id));
     return snap.exists() ? snap.data() as User : null;
   }
 }
